@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  	<title>Logging you in...</title>
+</head>
+<body>
+  	<p id="status">Logging you in...</p>
+
+  	<script>
+    	(async () => {
+			const params = new URLSearchParams(window.location.search);
+			const code = params.get("code");
+			const returnedState = params.get("state");
+			const error = params.get("error");
+
+			const statusEl = document.getElementById("status");
+
+			if (error) {
+				statusEl.textContent = `Login failed: ${error}`;
+				return;
+			}
+
+			// Verify state matches what we sent. If it doesn't, this redirect
+			// didn't originate from our flow — could be a CSRF attempt. Abort.
+			const expectedState = sessionStorage.getItem("oauth_state");
+			if (returnedState !== expectedState) {
+				statusEl.textContent = "State mismatch — login aborted for safety.";
+				return;
+			}
+
+			const verifier = sessionStorage.getItem("code_verifier");
+			const sessionId = sessionStorage.getItem("session_id");
+
+			// Hand the code + verifier to our backend, which will exchange
+			// them for tokens with Spotify. The verifier never went to Spotify
+			// before this — that's the whole point of PKCE.
+			const res = await fetch("http://127.0.0.1:8000/auth/exchange", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+				code,
+				code_verifier: verifier,
+				session_id: sessionId,
+				}),
+			});
+
+			if (!res.ok) {
+				statusEl.textContent = "Token exchange failed.";
+				return;
+			}
+
+			// Clean up — we don't need the verifier anymore.
+			sessionStorage.removeItem("code_verifier");
+			sessionStorage.removeItem("oauth_state");
+
+			statusEl.textContent = "Logged in. Redirecting...";
+			window.location.href = "/index.html";  // or wherever your app's main page is
+    	})();
+  </script>
+</body>
+</html>
