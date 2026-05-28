@@ -5,10 +5,13 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
+from spotify_auth import (
+    exchange_code_for_tokens,
+    refresh_access_token,
+    spotify_get,
+)
 
 load_dotenv()
-
-from spotify_auth import exchange_code_for_tokens, refresh_access_token
 
 app = FastAPI()
 
@@ -43,6 +46,14 @@ class TokenExchangeRequest(BaseModel):
     session_id: str  # client-generated UUID identifying this user session
 
 
+def get_access_token(session_id: str) -> str:
+    """Pull the access token for a session, or 401 if there isn't one."""
+    session = SESSIONS.get(session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="No session")
+    return session["access_token"]
+
+
 @app.post("/auth/exchange")
 async def exchange(req: TokenExchangeRequest):
     tokens = await exchange_code_for_tokens(req.code, req.code_verifier)
@@ -64,6 +75,38 @@ async def refresh(session_id: str):
     # Preserve the old one if it's absent from the response.
     SESSIONS[session_id] = {**SESSIONS[session_id], **new_tokens}
     return {"ok": True}
+
+
+@app.get("/me")
+async def me(session_id: str):
+    access_token = get_access_token(session_id)
+    try:
+        profile = await spotify_get(access_token, "/me")
+    except HTTPException as e:
+        if e.status_code == 401:
+            # Access token expired. Refresh and retry once.
+            await refresh_with_session(session_id)
+            access_token = get_access_token(session_id)
+            profile = await spotify_get(access_token, "/me")
+        else:
+            raise
+
+    # Return only what the frontend needs. Don't leak the whole payload —
+    # it includes things like email and country that the UI doesn't use.
+    return {
+        "id": profile["id"],
+        "display_name": profile.get("display_name"),
+        "image_url": (profile.get("images") or [{}])[0].get("url"),
+    }
+
+
+async def refresh_with_session(session_id: str):
+    """Refresh the access token for a session in place."""
+    session = SESSIONS.get(session_id)
+    if not session:
+        raise HTTPException(status_code=401, detail="No session")
+    new_tokens = await refresh_access_token(session["refresh_token"])
+    SESSIONS[session_id] = {**session, **new_tokens}
 
 
 @app.get("/callback")

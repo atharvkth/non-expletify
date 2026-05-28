@@ -3,6 +3,7 @@ import httpx
 from fastapi import HTTPException
 
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
+SPOTIFY_API_BASE = "https://api.spotify.com/v1"
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 REDIRECT_URI = os.getenv("REDIRECT_URI")
 
@@ -60,5 +61,40 @@ async def refresh_access_token(refresh_token: str) -> dict:
 
     if response.status_code != 200:
         raise HTTPException(status_code=400, detail="Refresh failed")
+
+    return response.json()
+
+
+async def spotify_get(access_token: str, path: str, params: dict | None = None) -> dict:
+    """
+    Authenticated GET against the Spotify Web API.
+    `path` is the part after /v1, e.g. "/me" or "/playlists/{id}".
+    Caller is responsible for token freshness — refresh upstream if 401.
+    """
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{SPOTIFY_API_BASE}{path}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params=params,
+        )
+
+    if response.status_code == 401:
+        # Token expired or revoked. Surface this distinctly so the
+        # route layer can decide whether to refresh and retry.
+        raise HTTPException(status_code=401, detail="Spotify token invalid")
+
+    if response.status_code == 429:
+        # Spotify is rate-limiting us. Retry-After tells us how long.
+        retry_after = response.headers.get("Retry-After", "1")
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limited; retry after {retry_after}s",
+        )
+
+    if not response.is_success:
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=f"Spotify API error: {response.text}",
+        )
 
     return response.json()

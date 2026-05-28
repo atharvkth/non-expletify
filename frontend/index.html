@@ -6,69 +6,84 @@
 <body>
 	<h1>Non-Expletify</h1>
 	<p>Clean up your Spotify playlists for the car ride.</p>
-  	<button id="login">Log in with Spotify</button>
 
-   <script>
+	<button id="login">Log in with Spotify</button>
+	<button id="whoami" style="display:none">Who am I?</button>
+	<pre id="profile"></pre>
+
+	<script>
 		const CLIENT_ID = "2c377c5faf7d47338eb15f259bed5c94";
 		const REDIRECT_URI = "http://127.0.0.1:8000/callback";
 		const SCOPES = [
-	  		"playlist-read-private",
-	  		"playlist-read-collaborative",
-	  		"playlist-modify-public",
-	  		"playlist-modify-private",
+		"playlist-read-private",
+		"playlist-read-collaborative",
+		"playlist-modify-public",
+		"playlist-modify-private",
 		].join(" ");
 
-		// Generate a cryptographically random string.
-		// This becomes our code_verifier — the secret only we hold.
 		function generateVerifier() {
-	  		const array = new Uint8Array(32);
-	  		crypto.getRandomValues(array);
-	  		return base64urlEncode(array);
+		const array = new Uint8Array(32);
+		crypto.getRandomValues(array);
+		return base64urlEncode(array);
 		}
 
-		// SHA-256 hash, base64url-encoded. This becomes the code_challenge —
-		// the public commitment we send to Spotify. Spotify will check that
-		// the verifier we send later hashes to this same value.
 		async function generateChallenge(verifier) {
-			const data = new TextEncoder().encode(verifier);
-			const hash = await crypto.subtle.digest("SHA-256", data);
-			return base64urlEncode(new Uint8Array(hash));
+		const data = new TextEncoder().encode(verifier);
+		const hash = await crypto.subtle.digest("SHA-256", data);
+		return base64urlEncode(new Uint8Array(hash));
 		}
 
-		// base64url is base64 with +/= replaced for URL safety.
 		function base64urlEncode(bytes) {
-			return btoa(String.fromCharCode(...bytes))
-				.replace(/\+/g, "-")
-				.replace(/\//g, "_")
-				.replace(/=+$/, "");
+		return btoa(String.fromCharCode(...bytes))
+			.replace(/\+/g, "-")
+			.replace(/\//g, "_")
+			.replace(/=+$/, "");
 		}
+
+		// Show/hide login vs whoami based on whether we have a session.
+		function updateUI() {
+		const sessionId = sessionStorage.getItem("session_id");
+		document.getElementById("login").style.display =
+			sessionId ? "none" : "inline-block";
+		document.getElementById("whoami").style.display =
+			sessionId ? "inline-block" : "none";
+		}
+
+		updateUI();
 
 		document.getElementById("login").addEventListener("click", async () => {
-			const verifier = generateVerifier();
-			const challenge = await generateChallenge(verifier);
-			const state = generateVerifier();  // anti-CSRF: random string we'll verify when Spotify redirects back
-			const sessionId = crypto.randomUUID();
+		const verifier = generateVerifier();
+		const challenge = await generateChallenge(verifier);
+		const state = generateVerifier();
+		const sessionId = crypto.randomUUID();
 
-			// Stash these for after the redirect. sessionStorage clears on tab close,
-			// which is fine for a transient auth handshake.
-			sessionStorage.setItem("code_verifier", verifier);
-			sessionStorage.setItem("oauth_state", state);
-			sessionStorage.setItem("session_id", sessionId);
+		sessionStorage.setItem("code_verifier", verifier);
+		sessionStorage.setItem("oauth_state", state);
+		sessionStorage.setItem("session_id", sessionId);
 
-			const params = new URLSearchParams({
-				response_type: "code",
-				client_id: CLIENT_ID,
-				scope: SCOPES,
-				redirect_uri: REDIRECT_URI,
-				state: state,
-				code_challenge_method: "S256",
-				code_challenge: challenge,
-			});
-
-			// Off to Spotify. The user will log in there (if not already),
-			// see the consent screen, and get redirected back to /callback.
-			window.location.href = `https://accounts.spotify.com/authorize?${params}`;
+		const params = new URLSearchParams({
+			response_type: "code",
+			client_id: CLIENT_ID,
+			scope: SCOPES,
+			redirect_uri: REDIRECT_URI,
+			state: state,
+			code_challenge_method: "S256",
+			code_challenge: challenge,
 		});
-  	</script>
+
+		window.location.href = `https://accounts.spotify.com/authorize?${params}`;
+		});
+
+		document.getElementById("whoami").addEventListener("click", async () => {
+		const sessionId = sessionStorage.getItem("session_id");
+		const res = await fetch(`/me?session_id=${encodeURIComponent(sessionId)}`);
+		if (!res.ok) {
+			document.getElementById("profile").textContent = `Error: ${res.status}`;
+			return;
+		}
+		const data = await res.json();
+		document.getElementById("profile").textContent = JSON.stringify(data, null, 2);
+		});
+	</script>
 </body>
 </html>
