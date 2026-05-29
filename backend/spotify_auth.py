@@ -78,13 +78,12 @@ async def spotify_get(access_token: str, path: str, params: dict | None = None) 
             params=params,
         )
 
+    # print(f"[spotify_get] {path} → {response.status_code}, body[:200]={response.text[:200]!r}")
+
     if response.status_code == 401:
-        # Token expired or revoked. Surface this distinctly so the
-        # route layer can decide whether to refresh and retry.
         raise HTTPException(status_code=401, detail="Spotify token invalid")
 
     if response.status_code == 429:
-        # Spotify is rate-limiting us. Retry-After tells us how long.
         retry_after = response.headers.get("Retry-After", "1")
         raise HTTPException(
             status_code=429,
@@ -96,5 +95,52 @@ async def spotify_get(access_token: str, path: str, params: dict | None = None) 
             status_code=response.status_code,
             detail=f"Spotify API error: {response.text}",
         )
+
+    return response.json()
+
+
+async def spotify_get_all(access_token: str, path: str, params: dict | None = None) -> list:
+    """
+    Fetch a paginated Spotify endpoint and return all items concatenated.
+
+    Spotify paginates with a `next` URL in the response. We follow it
+    until it's null. Caller passes the initial path; subsequent pages
+    are fetched from the full `next` URL Spotify returns.
+    """
+    items: list = []
+    url = f"{SPOTIFY_API_BASE}{path}"
+    current_params = params
+
+    async with httpx.AsyncClient() as client:
+        while url is not None:
+            response = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                params=current_params,
+            )
+
+            if response.status_code == 401:
+                raise HTTPException(status_code=401, detail="Spotify token invalid")
+            if response.status_code == 429:
+                retry_after = response.headers.get("Retry-After", "1")
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limited; retry after {retry_after}s",
+                )
+            if not response.is_success:
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"Spotify API error: {response.text}",
+                )
+
+            page = response.json()
+            items.extend(page.get("items", []))
+            url = page.get("next")
+            # Spotify's `next` URL already includes query params, so
+            # don't pass our original params again on follow-up pages.
+            current_params = None
+
+    return items
+
 
     return response.json()
